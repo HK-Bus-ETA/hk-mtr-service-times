@@ -8,30 +8,44 @@ import chardet
 
 
 REQUEST_COOLDOWN = 1
+MAX_RETRIES = 50
 
 
 def url_open(url, read_function):
-    if url is str:
+    if isinstance(url, str):
         req = urllib.request.Request(url)
         req.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36')
+        req.add_header('Accept', 'application/json')
     else:
         req = url
-    retry_count = 0
-    response = None
-    while response is None:
+
+    for attempt in range(MAX_RETRIES + 1):
         try:
-            response = read_function(urllib.request.urlopen(req, timeout=50))
+            with urllib.request.urlopen(req, timeout=50) as response:
+                return read_function(response)
         except Exception as e:
-            print(str(e))
-            retry_count += 1
-            if retry_count > 5:
+            print(f'Request attempt {attempt + 1}/{MAX_RETRIES + 1} failed: {e}')
+            if attempt == MAX_RETRIES:
                 raise
             time.sleep(REQUEST_COOLDOWN)
-    return response
 
 
 def get_web_json(url):
-    return url_open(url, lambda r: json.load(r))
+    def read_json(response):
+        body = response.read()
+        if not body.strip():
+            raise ValueError(f'Empty JSON response (HTTP {response.status})')
+        try:
+            return json.loads(body)
+        except json.JSONDecodeError as e:
+            content_type = response.headers.get('Content-Type', 'unknown')
+            preview = body[:200].decode('utf-8', errors='replace')
+            raise ValueError(
+                f'Invalid JSON response (HTTP {response.status}, '
+                f'Content-Type: {content_type}): {preview!r}'
+            ) from e
+
+    return url_open(url, read_json)
 
 
 def get_web_text(url, gzip=True):
